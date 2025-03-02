@@ -3,7 +3,7 @@ use std::vec;
 
 use crate::config::LlamaConfigJson;
 use crate::kvcache::KVCache;
-use crate::operators as OP;
+use crate::operators::{self as OP, add_self, masked_softmax, matmul_transb, rms_norm, swiglu};
 use crate::params::LLamaParams;
 use crate::tensor::Tensor;
 use safetensors::SafeTensors;
@@ -137,7 +137,6 @@ impl Llama<f32> {
         
         todo!("实现文本生成");
         
-        result
     }
 }
 
@@ -153,7 +152,39 @@ fn self_attention(
     total_seq_len: usize,
     dqkv: usize,
 ) {
-    todo!("Implement self_attention");
+    // todo!("Implement self_attention");
+    let q_data = q.data();
+    let k_data = k.data();
+    let v_data = v.data();
+    let att_scores_data = unsafe {
+        att_scores.data_mut()
+    };
+    let hidden_states_data = unsafe {
+        hidden_states.data_mut()
+    };
+    let id = 0;
+    for kv_head in (0..n_kv_h){
+        for group in (0..n_groups){
+            for i in (0..seq_len){
+                for j in (0..total_seq_len){
+                    let mut sum:f32 = 0.;
+                    for dim in 0..dqkv{
+                        let q_ij = q_data[i*seq_len + kv_head*group*dqkv+dim];
+                        let k_ij = k_data[j*total_seq_len+kv_head*dqkv+dim];
+                        sum += q_ij * k_ij;
+                    }
+                    att_scores_data[kv_head*n_kv_h+group*n_groups+i*seq_len+j] = sum;
+                }
+            }
+        }
+    }
+    for kv_head in (0..n_kv_h){
+        for group in (0..n_groups){
+            masked_softmax(&mut att_scores.slice(kv_head*n_kv_h*n_groups*seq_len*total_seq_len+group*seq_len*seq_len, &[seq_len, total_seq_len].to_vec()));
+        }
+    }
+    
+
 }
 
 fn mlp(
@@ -167,7 +198,15 @@ fn mlp(
     rms_w: &Tensor<f32>,
     eps: f32,
 ) {
-    todo!("Implement mlp");
+    // todo!("Implement mlp");
+   
+    rms_norm(hidden_states, &residual, rms_w, eps);
+    matmul_transb(gate, 0 as f32, &hidden_states, &w_gate, 1.0);
+    matmul_transb(up, 0 as f32, &hidden_states, &w_up, 1.0);
+    swiglu(up, &gate);
+    matmul_transb(hidden_states, 0 as f32, &up, &w_down, 1.0);
+    add_self(residual, &hidden_states);
+   
 }
 
 #[test]
@@ -195,7 +234,7 @@ pub fn test_mlp() {
         &rms_w,
         eps,
     );
-
+    residual.print();
     assert!(residual.close_to(
         &Tensor::<f32>::new(
             vec![
