@@ -184,6 +184,15 @@ fn self_attention(
         }
     }
     
+    for kv_head in (0..n_kv_h){
+        for group in (0..n_groups){
+           
+        }
+    }
+
+
+
+    
 
 }
 
